@@ -1,0 +1,24 @@
+# ============================================================
+# pipelines/variables-template.yml
+# Dokumentation der benotigten Variable Group 'vg-energy-prod'
+#
+# Anlegen in Azure DevOps:
+#   Pipelines -> Library -> + Variable group -> Name: vg-energy-prod
+#   Secrets mit dem Schlosssymbol markieren!
+#
+# Variable Group mit Azure Key Vault verknuepfen (empfohlen):
+#   -> Link secrets from an Azure Key Vault
+# ============================================================
+
+# Folgende Variablen muessen in der Variable Group 'vg-energy-prod' vorhanden sein:
+#
+# Name                    | Wert (Beispiel)                        | Secret?
+# ----------------------- | -------------------------------------- | -------
+# ENTRA_CLIENT_ID         | 00000000-0000-0000-0000-000000000000   | Nein
+# ACR_NAME                | energyacrprod                          | Nein
+# ACR_LOGIN_SERVER        | energyacrprod.azurecr.io               | Nein
+# CONTAINER_APP_NAME      | energy-api-prod                        | Nein
+#
+# Hinweis: ACR_NAME, ACR_LOGIN_SERVER und CONTAINER_APP_NAME werden nach dem
+# ersten Infra-Deployment automatisch als Pipeline-Variablen gesetzt.
+# Fuer den allerersten API-Deploy muessen sie manuell eingetragen werden.

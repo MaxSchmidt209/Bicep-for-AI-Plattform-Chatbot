@@ -1,0 +1,133 @@
+# ============================================================
+# pipelines/deploy-infra.yml
+# Bicep Infrastruktur-Deployment (einmalig / bei Infra-Aenderungen)
+# Voraussetzungen in Azure DevOps:
+#   - Service Connection 'SC-Azure-ManagedIdentity' (Managed Identity, Contributor auf RG)
+#   - Variable Group 'vg-energy-prod' (siehe unten)
+# ============================================================
+
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - main.bicep
+      - main.bicepparam
+      - modules/**
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  - group: vg-energy-prod
+  - name: RESOURCE_GROUP
+    value: 'rg-energy-prod'
+  - name: LOCATION
+    value: 'westeurope'
+
+stages:
+
+# ----------------------------------------------------------------
+# Stage 1: Bicep Validierung (Lint + What-If)
+# ----------------------------------------------------------------
+- stage: Validate
+  displayName: 'Validate Bicep'
+  jobs:
+  - job: LintAndWhatIf
+    displayName: 'Lint & What-If'
+    steps:
+
+    - task: AzureCLI@2
+      displayName: 'Bicep Lint'
+      inputs:
+        azureSubscription: 'SC-Azure-ManagedIdentity'
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          az bicep install
+          az bicep lint --file main.bicep
+
+    - task: AzureCLI@2
+      displayName: 'Bicep What-If (Vorschau der Aenderungen)'
+      inputs:
+        azureSubscription: 'SC-Azure-ManagedIdentity'
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          az group create \
+            --name $(RESOURCE_GROUP) \
+            --location $(LOCATION) \
+            --output none
+
+          az deployment group what-if \
+            --resource-group $(RESOURCE_GROUP) \
+            --template-file main.bicep \
+            --parameters main.bicepparam \
+            --parameters entraClientId=$(ENTRA_CLIENT_ID) \
+            --parameters imageTag=$(Build.BuildId)
+
+# ----------------------------------------------------------------
+# Stage 2: Infrastruktur deployen (mit Approval Gate)
+# ----------------------------------------------------------------
+- stage: DeployInfra
+  displayName: 'Deploy Infrastructure'
+  dependsOn: Validate
+  condition: succeeded()
+  jobs:
+  - deployment: DeployBicep
+    displayName: 'Deploy Bicep Templates'
+    environment: 'production'   # <-- Approval Gate in Azure DevOps konfigurieren!
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: 'Resource Group erstellen (idempotent)'
+            inputs:
+              azureSubscription: 'SC-Azure-ManagedIdentity'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az group create \
+                  --name $(RESOURCE_GROUP) \
+                  --location $(LOCATION) \
+                  --output none
+
+          - task: AzureCLI@2
+            displayName: 'Bicep Deployment ausfuehren'
+            inputs:
+              azureSubscription: 'SC-Azure-ManagedIdentity'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az deployment group create \
+                  --resource-group $(RESOURCE_GROUP) \
+                  --template-file main.bicep \
+                  --parameters main.bicepparam \
+                  --parameters entraClientId=$(ENTRA_CLIENT_ID) \
+                  --parameters imageTag=$(Build.BuildId) \
+                  --mode Incremental \
+                  --name infra-$(Build.BuildId)
+
+          - task: AzureCLI@2
+            displayName: 'Deployment Outputs speichern'
+            inputs:
+              azureSubscription: 'SC-Azure-ManagedIdentity'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                OUTPUTS=$(az deployment group show \
+                  --resource-group $(RESOURCE_GROUP) \
+                  --name infra-$(Build.BuildId) \
+                  --query properties.outputs \
+                  --output json)
+
+                echo "##vso[task.setvariable variable=ACR_LOGIN_SERVER;isOutput=true]$(echo $OUTPUTS | jq -r '.acrLoginServer.value')"
+                echo "##vso[task.setvariable variable=ACR_NAME;isOutput=true]$(echo $OUTPUTS | jq -r '.acrName.value')"
+                echo "##vso[task.setvariable variable=CONTAINER_APP_NAME;isOutput=true]$(echo $OUTPUTS | jq -r '.containerAppName.value')"
+                echo "Deployment erfolgreich!"
+                echo "Container App FQDN: $(echo $OUTPUTS | jq -r '.containerAppFqdn.value')"
